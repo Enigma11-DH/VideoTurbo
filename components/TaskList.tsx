@@ -1,0 +1,162 @@
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import {
+  Play,
+  Download,
+  Trash2,
+  Clock,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+} from "lucide-react";
+import { useTaskStore, TaskStatus } from "@/lib/store";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
+import { t } from "@/lib/i18n";
+
+const statusConfig: Record<TaskStatus, { color: string; icon: any }> = {
+  pending: { color: "bg-zinc-500", icon: Clock },
+  generating_script: { color: "bg-blue-500", icon: Loader2 },
+  generating_audio: { color: "bg-indigo-500", icon: Loader2 },
+  gathering_visuals: { color: "bg-purple-500", icon: Loader2 },
+  rendering: { color: "bg-orange-500", icon: Loader2 },
+  completed: { color: "bg-green-500", icon: CheckCircle2 },
+  failed: { color: "bg-red-500", icon: AlertCircle },
+};
+
+export function TaskList() {
+  const { tasks, removeTask, language } = useTaskStore();
+
+  if (tasks.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+        <div className="w-24 h-24 mb-6 rounded-full bg-muted flex items-center justify-center">
+          <Play className="w-10 h-10 opacity-50" />
+        </div>
+        <h2 className="text-xl font-semibold mb-2 text-foreground">
+          {t("taskList.noTasks", language)}
+        </h2>
+        <p>{t("taskList.createToStart", language)}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto p-8 space-y-8">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">
+          {t("taskList.title", language)}
+        </h1>
+        <p className="text-muted-foreground mt-2">
+          {t("taskList.desc", language)}
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {tasks.map((task) => {
+          const config = statusConfig[task.status];
+          const StatusIcon = config.icon;
+          const isProcessing = !["completed", "failed", "pending"].includes(
+            task.status,
+          );
+          const statusLabel = t(`taskList.status.${task.status}`, language);
+
+          return (
+            <Card key={task.id} className="overflow-hidden">
+              <CardContent className="p-0">
+                <div className="flex flex-col md:flex-row">
+                  {/* Thumbnail Placeholder */}
+                  <div className="w-full md:w-48 h-32 bg-muted flex items-center justify-center border-r relative group">
+                    {task.status === "completed" ? (
+                      <>
+                        <img
+                          src={`https://picsum.photos/seed/${task.id}/400/300`}
+                          alt="Thumbnail"
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button
+                            size="icon"
+                            variant="secondary"
+                            className="rounded-full w-12 h-12"
+                          >
+                            <Play className="w-6 h-6 ml-1" />
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-muted-foreground flex flex-col items-center">
+                        <StatusIcon
+                          className={`w-8 h-8 mb-2 ${isProcessing ? "animate-spin" : ""}`}
+                        />
+                        <span className="text-xs font-medium uppercase tracking-wider">
+                          {statusLabel}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Details */}
+                  <div className="flex-1 p-6 flex flex-col justify-between">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-semibold text-lg line-clamp-1">
+                          {task.topic}
+                        </h3>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {t("taskList.created", language)}{" "}
+                          {formatDistanceToNow(task.createdAt, {
+                            addSuffix: true,
+                            locale: language === "zh" ? zhCN : undefined,
+                          })}
+                        </p>
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className={`${config.color} text-white border-none`}
+                      >
+                        {statusLabel}
+                      </Badge>
+                    </div>
+
+                    {isProcessing && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>{t("taskList.progress", language)}</span>
+                          <span>{task.progress}%</span>
+                        </div>
+                        <Progress value={task.progress} className="h-2" />
+                      </div>
+                    )}
+
+                    {!isProcessing && (
+                      <div className="flex justify-end space-x-2 mt-4">
+                        {task.status === "completed" && (
+                          <Button variant="outline" size="sm">
+                            <Download className="w-4 h-4 mr-2" />{" "}
+                            {t("taskList.download", language)}
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => removeTask(task.id)}
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />{" "}
+                          {t("taskList.delete", language)}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
