@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./output:/app/output
+      - ./db:/app/db
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+      - DB_PATH=/app/db/videoturbo.db
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    volumes:
+      - ./output:/app/output
+      - ./db:/app/db
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DB_PATH=/app/db/videoturbo.db
+      - OUTPUT_DIR=/app/output
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
