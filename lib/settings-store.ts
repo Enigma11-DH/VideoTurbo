@@ -19,6 +19,7 @@ export interface CustomApiEntry {
 
 // Built-in presets for quick-fill
 export const LLM_PRESETS: Array<{ label: string; baseUrl: string; model: string }> = [
+  { label: '智谱AI (Zhipu)', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
   { label: '文心一言', baseUrl: 'https://qianfan.baidubce.com/v2', model: 'ernie-4.5-8k' },
   { label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-turbo' },
   { label: 'OpenAI',  baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },

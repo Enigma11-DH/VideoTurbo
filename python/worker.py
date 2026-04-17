@@ -13,6 +13,10 @@ from tasks.video_render import VideoRenderTask
 from tasks.ai_analysis import AIAnalysisTask
 from tasks.platform_crawler import PlatformCrawlerTask
 from tasks.pipeline import PipelineTask
+from tasks.transcribe import TranscribeTask
+from tasks.video_analyze import VideoAnalyzeTask
+from tasks.beat_analyze import BeatAnalyzeTask
+from tasks.auto_edit import AutoEditTask
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 QUEUE_KEY = "task:queue"
@@ -47,6 +51,10 @@ def main():
         "analyze": AIAnalysisTask(),
         "crawl": PlatformCrawlerTask(),
         "pipeline": PipelineTask(),
+        "transcribe": TranscribeTask(),
+        "video_analyze": VideoAnalyzeTask(),
+        "beat_analyze": BeatAnalyzeTask(),
+        "auto_edit": AutoEditTask(),
     }
 
     print(f"[Worker] Listening on queue: {QUEUE_KEY}")

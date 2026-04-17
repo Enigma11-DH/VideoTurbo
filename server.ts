@@ -7,6 +7,7 @@ import Redis from "ioredis";
 import Database from "better-sqlite3";
 import multer from "multer";
 import { randomUUID } from "crypto";
+import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -422,6 +423,251 @@ async function startServer() {
     }
   });
 
+  // ---------- Transcribe (Whisper) ----------
+
+  app.post("/api/transcribe", upload.single("video"), async (req, res) => {
+    let videoPath: string;
+    if (req.file) {
+      videoPath = req.file.path;
+    } else {
+      videoPath = req.body.videoPath;
+    }
+    if (!videoPath) return res.status(400).json({ error: "videoPath or video file required" });
+
+    const taskId = randomUUID();
+    const task = {
+      taskId,
+      type: "transcribe",
+      payload: {
+        videoPath,
+        burnSubtitles: req.body.burnSubtitles === "true" || req.body.burnSubtitles === true,
+        language: req.body.language || null,
+      },
+    };
+
+    await redis.lpush(QUEUE_KEY, JSON.stringify(task));
+    res.json({ taskId });
+  });
+
+  // ---------- Video Analyze (OpenCV) ----------
+
+  app.post("/api/video-analyze", upload.single("video"), async (req, res) => {
+    let videoPath: string;
+    if (req.file) {
+      videoPath = req.file.path;
+    } else {
+      videoPath = req.body.videoPath;
+    }
+    if (!videoPath) return res.status(400).json({ error: "video file or videoPath required" });
+
+    const taskId = randomUUID();
+    const task = {
+      taskId,
+      type: "video_analyze",
+      payload: {
+        videoPath,
+        sampleInterval: parseInt(req.body.sampleInterval || "15", 10),
+      },
+    };
+
+    await redis.lpush(QUEUE_KEY, JSON.stringify(task));
+    res.json({ taskId });
+  });
+
+  // ---------- Beat Analyze (librosa) ----------
+
+  app.post("/api/beat-analyze", upload.single("audio"), async (req, res) => {
+    const audioPath = req.file?.path;
+    if (!audioPath) return res.status(400).json({ error: "audio file required" });
+
+    const taskId = randomUUID();
+    await redis.lpush(QUEUE_KEY, JSON.stringify({
+      taskId,
+      type: "beat_analyze",
+      payload: {
+        audioPath,
+        everyNBeats: parseInt(req.body.everyNBeats || "2", 10),
+      },
+    }));
+    res.json({ taskId });
+  });
+
+  // ---------- Auto-Edit (智能成片：批量素材 + 音频 → 轨道草稿 JSON) ----------
+
+  app.post(
+    "/api/auto-edit",
+    upload.fields([
+      { name: "videos", maxCount: 20 },
+      { name: "audio",  maxCount: 1  },
+    ]),
+    async (req, res) => {
+      console.log("[Auto-Edit] Received request");
+      
+      try {
+        const taskId = randomUUID();
+        const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+        const videoFiles = files?.videos ?? [];
+        const audioFile  = files?.audio?.[0] ?? null;
+
+        const {
+          url          = "",
+          aspectRatio  = "9:16",
+          duration     = "30",
+          template     = "vlog",
+          llmBaseUrl   = "",
+          llmApiKey    = "",
+          llmModel     = "",
+        } = req.body as Record<string, string>;
+
+        console.log(`[Auto-Edit] Task ID: ${taskId}`);
+        console.log(`[Auto-Edit] Videos: ${videoFiles.length} files`);
+        console.log(`[Auto-Edit] Audio: ${audioFile ? audioFile.originalname : "none"}`);
+        console.log(`[Auto-Edit] URL: ${url || "none"}`);
+        console.log(`[Auto-Edit] Config: aspect=${aspectRatio}, duration=${duration}s, template=${template}`);
+        
+        // Log LLM config (masked)
+        if (llmBaseUrl && llmApiKey) {
+          console.log(`[Auto-Edit] LLM Provider: ${llmBaseUrl}`);
+          console.log(`[Auto-Edit] LLM Model: ${llmModel}`);
+          console.log(`[Auto-Edit] LLM API Key: ${llmApiKey.substring(0, 8)}...${llmApiKey.slice(-4)}`);
+        } else {
+          console.warn("[Auto-Edit] ⚠️ No LLM configuration provided! Task may fail during AI generation.");
+        }
+
+        if (videoFiles.length === 0 && !url) {
+          console.error("[Auto-Error] No videos or URL provided");
+          return res.status(400).json({ error: "请至少上传视频文件或提供参考链接" });
+        }
+
+        const payload = {
+          video_paths:   videoFiles.map((f) => f.path),
+          audio_path:    audioFile?.path ?? null,
+          reference_url: url,
+          aspect_ratio:  aspectRatio,
+          duration_sec:  Number(duration),
+          template,
+          // Add LLM configuration
+          llm_config: {
+            base_url: llmBaseUrl,
+            api_key:  llmApiKey,
+            model:    llmModel,
+          },
+        };
+
+        console.log("[Auto-Edit] Creating task in Redis...");
+        await redis.hset(`task:${taskId}`, { status: "queued", progress: "0" });
+        await redis.lpush(QUEUE_KEY, JSON.stringify({
+          taskId,
+          type: "auto_edit",
+          payload,
+        }));
+
+        console.log(`[Auto-Edit] ✅ Task created successfully: ${taskId}`);
+        res.json({ taskId });
+        
+      } catch (e: any) {
+        console.error("[Auto-Edit] Error:", e.message);
+        console.error("[Auto-Edit] Stack:", e.stack);
+        
+        if (!res.headersSent) {
+          res.status(500).json({ 
+            error: e.message || "服务器内部错误",
+          });
+        }
+      }
+    }
+  );
+
+  // ---------- Auto-Analyze (Unified: Video + Beat + Transcribe) ----------
+
+  app.post("/api/auto-analyze", upload.single("video"), async (req, res) => {
+    const videoPath = req.file?.path;
+    if (!videoPath) return res.status(400).json({ error: "video file required" });
+
+    const analyzeId = randomUUID();
+    const audioPath = path.join(OUTPUT_DIR, "uploads", `${analyzeId.slice(0, 12)}_audio.wav`);
+
+    try {
+      const { execSync } = await import("child_process");
+
+      execSync(
+        `ffmpeg -y -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "${audioPath}"`,
+        { stdio: "pipe" }
+      );
+
+      const tasks = {
+        video_analyze: { taskId: randomUUID(), type: "video_analyze", payload: { videoPath, sampleInterval: 15 } },
+        beat_analyze: { taskId: randomUUID(), type: "beat_analyze", payload: { audioPath, everyNBeats: 2 } },
+        transcribe: { taskId: randomUUID(), type: "transcribe", payload: { videoPath, burnSubtitles: false, language: null } },
+      };
+
+      for (const task of Object.values(tasks)) {
+        await redis.lpush(QUEUE_KEY, JSON.stringify(task));
+      }
+
+      db.prepare(
+        `INSERT INTO tasks (id, project_id, type, status, progress, payload_json)
+         VALUES (?, NULL, 'auto_analyze', 'analyzing', 0, ?)`
+      ).run(analyzeId, JSON.stringify({ videoPath, audioPath, subTaskIds: Object.fromEntries(Object.entries(tasks).map(([k, v]) => [k, v.taskId])) }));
+
+      res.json({ analyzeId, subTaskIds: Object.fromEntries(Object.entries(tasks).map(([k, v]) => [k, v.taskId])), status: "analyzing" });
+    } catch (error) {
+      console.error("[Auto-Analyze] Error:", error);
+      res.status(500).json({ error: "Failed to start auto-analysis" });
+    }
+  });
+
+  app.get("/api/auto-analyze/:analyzeId", async (req, res) => {
+    const { analyzeId } = req.params;
+
+    try {
+      const taskRow = db.prepare("SELECT * FROM tasks WHERE id = ?").get(analyzeId) as any;
+      if (!taskRow || taskRow.type !== "auto_analyze") return res.status(404).json({ error: "Not found" });
+
+      const payload = JSON.parse(taskRow.payload_json);
+      const subTaskIds = payload.subTaskIds || {};
+
+      const results: any = {};
+      let allCompleted = true;
+      let anyFailed = false;
+
+      for (const [type, subTaskId] of Object.entries(subTaskIds)) {
+        const statusRes = await fetch(`http://localhost:3000/api/tasks/${subTaskId}`);
+        if (!statusRes.ok) { results[type] = { status: "pending" }; allCompleted = false; continue; }
+
+        const statusData = await statusRes.json();
+        results[type] = statusData;
+
+        if (statusData.status === "completed") {
+          results[type].result_json &&= JSON.parse(statusData.result_json);
+        } else if (statusData.status === "failed") {
+          anyFailed = true;
+          allCompleted = false;
+        } else {
+          allCompleted = false;
+        }
+      }
+
+      const overallStatus = anyFailed ? "failed" : allCompleted ? "completed" : "analyzing";
+
+      if (allCompleted && taskRow.status !== "completed") {
+        db.prepare("UPDATE tasks SET status = 'completed', progress = 100 WHERE id = ?").run(analyzeId);
+      }
+
+      res.json({
+        analyzeId,
+        status: overallStatus,
+        videoAnalysis: results.video_analyze?.result_json || null,
+        beatAnalysis: results.beat_analyze?.result_json || null,
+        transcription: results.transcribe?.result_json || null,
+        subTasks: results,
+      });
+    } catch (error) {
+      console.error("[Auto-Analyze Status] Error:", error);
+      res.status(500).json({ error: "Failed to get analysis status" });
+    }
+  });
+
   // ---------- Legacy render status (for backward compat) ----------
 
   app.get("/api/render/:jobId", (req, res) => {
@@ -431,6 +677,165 @@ async function startServer() {
       return res.json(JSON.parse(fs.readFileSync(statusFile, "utf-8")));
     }
     res.json({ status: "processing" });
+  });
+
+  // ---------- LLM API Test Endpoint ----------
+
+  app.post("/api/test-llm", async (req, res) => {
+    console.log("[Test-LLM] Received API test request");
+    
+    try {
+      const { baseUrl, apiKey, model } = req.body;
+
+      console.log(`[Test-LLM] Testing connection to: ${baseUrl}`);
+      console.log(`[Test-LLM] Model: ${model}`);
+
+      if (!baseUrl || !apiKey || !model) {
+        console.error("[Test-LLM] Missing required fields:", { 
+          hasBaseUrl: !!baseUrl, 
+          hasApiKey: !!apiKey, 
+          hasModel: !!model 
+        });
+        return res.status(400).json({ 
+          success: false, 
+          error: "Missing required fields: baseUrl, apiKey, model" 
+        });
+      }
+
+      const chatUrl = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+      
+      console.log(`[Test-LLM] Sending test request to: ${chatUrl}`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+      try {
+        const llmRes = await fetch(chatUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: "user", content: "Hello, this is a test message. Please respond with 'OK' only." }
+            ],
+            max_tokens: 10,
+            temperature: 0.1,
+          }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        console.log(`[Test-LLM] Response status: ${llmRes.status}`);
+        console.log(`[Test-LLM] Response OK: ${llmRes.ok}`);
+
+        const responseText = await llmRes.text();
+        console.log(`[Test-LLM] Response body (first 200 chars): ${responseText.substring(0, 200)}`);
+
+        if (!llmRes.ok) {
+          let errorDetail = `HTTP ${llmRes.status}`;
+          
+          try {
+            const errorData = JSON.parse(responseText);
+            errorDetail = errorData.error?.message || errorData.message || errorDetail;
+            
+            // Handle common API errors
+            if (llmRes.status === 401) {
+              errorDetail = "API Key 无效或已过期，请检查您的密钥";
+            } else if (llmRes.status === 403) {
+              errorDetail = "访问被拒绝，请检查 API Key 权限";
+            } else if (llmRes.status === 404) {
+              errorDetail = "模型不存在或 URL 错误，请检查 Base URL 和模型名称";
+            } else if (llmRes.status === 429) {
+              errorDetail = "请求过于频繁，请稍后重试";
+            }
+          } catch (e) {
+            errorDetail = `${errorDetail}: ${responseText.substring(0, 200)}`;
+          }
+
+          console.error(`[Test-LLM] API Error: ${errorDetail}`);
+          return res.status(llmRes.status).json({
+            success: false,
+            error: errorDetail,
+            statusCode: llmRes.status,
+          });
+        }
+
+        // Try to parse as JSON
+        let data;
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error(`[Test-LLM] Failed to parse JSON response:`, parseError);
+          return res.status(502).json({
+            success: false,
+            error: `API 返回了无效的 JSON 格式。原始响应: ${responseText.substring(0, 300)}...`,
+          });
+        }
+
+        // Validate response structure
+        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+          console.error(`[Test-LLM] Invalid response structure:`, Object.keys(data));
+          return res.status(502).json({
+            success: false,
+            error: `API 响应格式异常：缺少 choices 字段。响应结构: ${JSON.stringify(Object.keys(data))}`,
+          });
+        }
+
+        const content = data.choices[0]?.message?.content;
+        
+        console.log(`[Test-LLM] ✅ Connection successful! Model response: "${content}"`);
+        
+        return res.json({
+          success: true,
+          model: model,
+          provider: baseUrl,
+          responsePreview: content?.substring(0, 100),
+          message: "连接成功",
+        });
+
+      } catch (fetchError: any) {
+        clearTimeout(timeout);
+        
+        console.error(`[Test-LLM] Network/Fetch Error:`, fetchError);
+        
+        let errorMessage;
+        if (fetchError.name === 'AbortError') {
+          errorMessage = "连接超时（15秒），请检查网络或 API 地址是否正确";
+        } else if (fetchError.code === 'ECONNREFUSED') {
+          errorMessage = `无法连接到服务器 (${baseUrl})，请检查 Base URL 是否正确`;
+        } else if (fetchError.code === 'ENOTFOUND') {
+          errorMessage = `DNS 解析失败，无法找到主机: ${baseUrl}`;
+        } else {
+          errorMessage = `网络错误: ${fetchError.message}`;
+        }
+
+        return res.status(502).json({
+          success: false,
+          error: errorMessage,
+        });
+      }
+
+    } catch (error: any) {
+      console.error("[Test-LLM] Unexpected error:", error);
+      return res.status(500).json({
+        success: false,
+        error: `服务器内部错误: ${error.message}`,
+      });
+    }
+  });
+
+  // ---------- Enhanced Auto-Edit Endpoint with Better Error Handling ----------
+
+  // Override the auto-edit endpoint to add better logging and error handling
+  app._router.stack.forEach((layer: any, i: number) => {
+    if (layer.route?.path === "/api/auto-edit" && layer.route?.methods.post) {
+      console.log("[Server] Found /api/auto-edit endpoint at stack index", i);
+    }
   });
 
   // ---------- Vite Dev Server ----------

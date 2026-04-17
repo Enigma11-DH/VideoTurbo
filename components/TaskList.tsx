@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
+  Wand2,
+  FileJson,
 } from "lucide-react";
 import { useTaskStore, TaskStatus } from "@/lib/store";
 import { formatDistanceToNow } from "date-fns";
@@ -30,6 +32,10 @@ const statusConfig: Record<TaskStatus, { color: string; icon: any; phaseLabel?: 
   pipeline_analyzing: { color: "bg-blue-500", icon: Loader2, phaseLabel: "AI 正在分析主题..." },
   pipeline_fetching: { color: "bg-purple-500", icon: Loader2, phaseLabel: "正在搜索素材..." },
   pipeline_rendering: { color: "bg-orange-500", icon: Loader2, phaseLabel: "FFmpeg 渲染中..." },
+  transcribing: { color: "bg-cyan-500", icon: Loader2, phaseLabel: "Whisper 转录中..." },
+  video_analyzing: { color: "bg-emerald-500", icon: Loader2, phaseLabel: "OpenCV 分析中..." },
+  beat_analyzing:  { color: "bg-pink-500",    icon: Loader2, phaseLabel: "librosa 节拍分析中..." },
+  auto_editing:    { color: "bg-violet-500",  icon: Wand2,   phaseLabel: "智能剪辑中..." },
   completed: { color: "bg-green-500", icon: CheckCircle2 },
   failed: { color: "bg-red-500", icon: AlertCircle },
 };
@@ -162,7 +168,17 @@ export function TaskList() {
 
                     {!isProcessing && (
                       <div className="flex justify-end space-x-2 mt-4">
-                        {task.status === "completed" && task.resultUrl && (
+                        {task.status === "completed" && task.resultUrl && task.type === "auto_edit" && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => window.open(task.resultUrl, "_blank")}
+                          >
+                            <FileJson className="w-4 h-4 mr-2" />
+                            下载草稿 JSON
+                          </Button>
+                        )}
+                        {task.status === "completed" && task.resultUrl && task.type !== "auto_edit" && (
                           <Button variant="outline" size="sm" onClick={() => window.open(task.resultUrl, '_blank')}>
                             <Download className="w-4 h-4 mr-2" />{" "}
                             {t("taskList.download", language)}

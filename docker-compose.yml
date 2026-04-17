@@ -41,5 +41,23 @@ services:
       - redis-data:/data
     restart: unless-stopped
 
+  fastapi:
+    build:
+      context: ./python
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./output:/app/output
+      - ./uploads:/app/uploads
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - OUTPUT_DIR=/app/output
+      - UPLOAD_DIR=/app/uploads
+      - RELOAD=false
+    depends_on:
+      - redis
+    restart: unless-stopped
+
 volumes:
   redis-data:

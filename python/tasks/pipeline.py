@@ -7,6 +7,7 @@ import os
 import subprocess
 import urllib.parse
 import urllib.request
+import logging
 
 import redis
 
@@ -14,7 +15,9 @@ from tasks.video_render import VideoRenderTask
 from utils.db import get_db, update_task
 from utils.ffmpeg_helper import download_file
 from utils.llm_adapter import adapter_from_payload
+from utils.json_utils import safe_parse_json_array, extract_json_from_llm_response
 
+logger = logging.getLogger(__name__)
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.join(os.getcwd(), "output"))
 
 
@@ -172,17 +175,30 @@ Return ONLY a JSON array:
 
         text = adapter.chat([{"role": "user", "content": prompt}])
 
-        # Parse JSON, stripping markdown fences if present
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1]
-            cleaned = cleaned.rsplit("```", 1)[0].strip()
+        logger.info(f"[Pipeline] LLM response received (length: {len(text)})")
+        logger.debug(f"[Pipeline] LLM raw response preview: {text[:300]}...")
 
-        try:
-            scenes = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            print(f"[Pipeline] JSON parse error: {e}\nRaw: {cleaned[:500]}")
-            scenes = []
+        # Use robust JSON parser with multiple fallback strategies
+        scenes = safe_parse_json_array(text, context=f"pipeline:{task_id}")
+
+        if not scenes:
+            # Save raw response for debugging
+            debug_file = os.path.join(OUTPUT_DIR, "debug", f"{task_id}_llm_response.txt")
+            os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+            try:
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(f"Task ID: {task_id}\n")
+                    f.write(f"Timestamp: {__import__('datetime').datetime.now()}\n")
+                    f.write(f"Prompt length: {len(prompt)}\n")
+                    f.write(f"Response length: {len(text)}\n")
+                    f.write("="*80 + "\n\n")
+                    f.write("RAW LLM RESPONSE:\n")
+                    f.write(text)
+                logger.error(f"[Pipeline] JSON parse failed. Raw response saved to: {debug_file}")
+            except Exception as e:
+                logger.warning(f"[Pipeline] Failed to save debug file: {e}")
+
+            logger.error(f"[Pipeline] Failed to generate storyboard from LLM response")
 
         return scenes if isinstance(scenes, list) else []
 

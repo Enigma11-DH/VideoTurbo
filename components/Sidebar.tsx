@@ -3,17 +3,12 @@ import {
   PlusCircle,
   Settings as SettingsIcon,
   ListVideo,
-  Scissors,
   Languages,
-  LogOut,
-  LogIn,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTaskStore } from "@/lib/store";
 import { t } from "@/lib/i18n";
-import { useEffect, useState } from "react";
-import { auth, signInWithGoogle, logout } from "@/lib/firebase";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { useState } from "react";
 import { toast } from "sonner";
 
 interface SidebarProps {
@@ -23,33 +18,7 @@ interface SidebarProps {
 
 export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   const { tasks, language, setLanguage } = useTaskStore();
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    if (!auth) return;
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleLogin = async () => {
-    try {
-      await signInWithGoogle();
-      toast.success(t("studio.complete", language) || "Logged in successfully");
-    } catch (error) {
-      toast.error(t("studio.failed", language) || "Login failed");
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await logout();
-      toast.success(t("studio.complete", language) || "Logged out successfully");
-    } catch (error) {
-      toast.error(t("studio.failed", language) || "Logout failed");
-    }
-  };
+  const [currentLang, setCurrentLang] = useState(language);
 
   const activeTasksCount = tasks.filter(
     (t) => t.status !== "completed" && t.status !== "failed",
@@ -63,7 +32,6 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
       icon: ListVideo,
       badge: activeTasksCount,
     },
-    { id: "studio", label: t("sidebar.videoStudio", language), icon: Scissors },
     { id: "settings", label: t("sidebar.settings", language), icon: SettingsIcon },
   ];
 
@@ -106,33 +74,16 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           );
         })}
       </div>
-      
+
       <div className="p-4 border-t space-y-4">
-        {auth ? (
-          user ? (
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium truncate max-w-[120px]">{user.displayName || user.email}</span>
-              <button onClick={handleLogout} className="text-xs text-muted-foreground hover:text-foreground flex items-center">
-                <LogOut className="w-4 h-4 mr-1" />
-                Logout
-              </button>
-            </div>
-          ) : (
-            <button onClick={handleLogin} className="w-full flex items-center justify-center px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
-              <LogIn className="w-4 h-4 mr-2" />
-              Login with Google
-            </button>
-          )
-        ) : (
-          <div className="text-xs text-destructive text-center">
-            Firebase not configured
-          </div>
-        )}
-        
         <div className="flex items-center justify-between">
-          <div className="text-xs text-muted-foreground">v1.0.0-beta</div>
+          <div className="text-xs text-muted-foreground">v2.0.0</div>
           <button
-            onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')}
+            onClick={() => {
+              const newLang = currentLang === 'en' ? 'zh' : 'en';
+              setCurrentLang(newLang);
+              setLanguage(newLang);
+            }}
             className="flex items-center text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <Languages className="w-4 h-4 mr-1" />

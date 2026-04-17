@@ -1,12 +1,16 @@
 """
-AI Analysis Task — Uses Gemini API to analyze assets and generate storyboards.
+AI Analysis Task — Uses LLM API to analyze assets and generate storyboards.
 """
 import json
 import os
+import logging
 
 import redis
 
 from utils.db import get_db, update_task
+from utils.json_utils import safe_parse_json_array, extract_json_from_llm_response
+
+logger = logging.getLogger(__name__)
 
 
 class AIAnalysisTask:
@@ -61,16 +65,29 @@ Return ONLY a JSON array of scenes:
             response = model.generate_content(prompt)
             result_text = response.text or "[]"
 
-            # Try to parse as JSON
-            try:
-                # Strip markdown code fences if present
-                cleaned = result_text.strip()
-                if cleaned.startswith("```"):
-                    cleaned = cleaned.split("\n", 1)[1]
-                    cleaned = cleaned.rsplit("```", 1)[0]
-                scenes = json.loads(cleaned)
-            except json.JSONDecodeError:
-                scenes = []
+            logger.info(f"[AI Analysis] LLM response received (length: {len(result_text)})")
+            logger.debug(f"[AI Analysis] Raw response preview: {result_text[:300]}...")
+
+            # Use robust JSON parser with multiple fallback strategies
+            scenes = safe_parse_json_array(result_text, context=f"ai_analysis:{task_id}")
+
+            if not scenes:
+                # Save raw response for debugging
+                debug_file = os.path.join(os.environ.get("OUTPUT_DIR", os.getcwd()), "debug", f"{task_id}_analysis_response.txt")
+                os.makedirs(os.path.dirname(debug_file), exist_ok=True)
+                try:
+                    with open(debug_file, 'w', encoding='utf-8') as f:
+                        f.write(f"Task ID: {task_id}\n")
+                        f.write(f"Timestamp: {__import__('datetime').datetime.now()}\n")
+                        f.write(f"Response length: {len(result_text)}\n")
+                        f.write("="*80 + "\n\n")
+                        f.write("RAW LLM RESPONSE:\n")
+                        f.write(result_text)
+                    logger.error(f"[AI Analysis] JSON parse failed. Raw response saved to: {debug_file}")
+                except Exception as e:
+                    logger.warning(f"[AI Analysis] Failed to save debug file: {e}")
+
+                logger.error(f"[AI Analysis] Failed to generate storyboard from LLM response")
 
             r.hset(f"task:{task_id}", mapping={"status": "analyzing", "progress": "90"})
 

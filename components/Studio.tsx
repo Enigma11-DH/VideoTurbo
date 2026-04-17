@@ -27,6 +27,9 @@ import {
   Search,
   Type,
   ArrowRightLeft,
+  Brain,
+  Music,
+  MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTaskStore } from "@/lib/store";
@@ -87,6 +90,20 @@ export function Studio() {
   const [douyinUrl, setDouyinUrl] = useState("");
   const [isParsingDouyin, setIsParsingDouyin] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Auto-Analyze State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeId, setAnalyzeId] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<{
+    videoAnalysis: any;
+    beatAnalysis: any;
+    transcription: any;
+  } | null>(null);
+  const [analyzeProgress, setAnalyzeProgress] = useState<Record<string, {status: string; progress?: number}>>({
+    video_analyze: { status: "pending" },
+    beat_analyze: { status: "pending" },
+    transcribe: { status: "pending" },
+  });
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -165,8 +182,10 @@ export function Studio() {
       setIsParsingDouyin(false);
     }
   };
-  const handleFilesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFilesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
+    if (files.length === 0) return;
+
     const newAssets = files.map((file: File) => ({
       id: Math.random().toString(36).substring(7),
       type: "user" as const,
@@ -182,6 +201,161 @@ export function Studio() {
     toast.success(
       `${t("studio.imported", language)} ${files.length} ${t("studio.videos", language)}`,
     );
+
+    // Auto-trigger analysis for first video file
+    if (files.length > 0 && files[0].type.startsWith("video/")) {
+      await triggerAutoAnalysis(files[0]);
+    }
+  };
+
+  /** Trigger unified auto-analysis after video upload */
+  const triggerAutoAnalysis = async (videoFile: File) => {
+    setIsAnalyzing(true);
+    setAnalyzeId(null);
+    setAnalysisResult(null);
+    setAnalyzeProgress({
+      video_analyze: { status: "analyzing" },
+      beat_analyze: { status: "pending" },
+      transcribe: { status: "pending" },
+    });
+
+    try {
+      toast.info(language === 'en'
+        ? "🎬 Starting automatic video analysis... (Scene detection, Beat detection, Subtitle generation)"
+        : "🎬 正在启动自动视频分析...(场景检测、节拍检测、字幕生成)"
+      );
+
+      const formData = new FormData();
+      formData.append("video", videoFile);
+
+      const res = await fetch("/api/auto-analyze", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || "Failed to start analysis");
+
+      setAnalyzeId(data.analyzeId);
+
+      // Poll for analysis completion
+      await pollAutoAnalysis(data.analyzeId);
+
+      toast.success(language === 'en'
+        ? "✅ Analysis complete! Timeline auto-generated."
+        : "✅ 分析完成！时间轴已自动生成"
+      );
+    } catch (error: any) {
+      console.error("[Auto-Analyze] Error:", error);
+      toast.error(error.message || (language === 'en' ? "Auto-analysis failed" : "自动分析失败"));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  /** Poll auto-analysis status until all tasks complete */
+  const pollAutoAnalysis = async (id: string): Promise<void> => {
+    const maxAttempts = 180; // 9 minutes max
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      try {
+        const res = await fetch(`/api/auto-analyze/${id}`);
+        const data = await res.json();
+
+        // Update progress state
+        const newProgress: Record<string, {status: string; progress?: number}> = {};
+        if (data.subTasks?.video_analyze) newProgress.video_analyze = { status: data.subTasks.video_analyze.status };
+        if (data.subTasks?.beat_analyze) newProgress.beat_analyze = { status: data.subTasks.beat_analyze.status };
+        if (data.subTasks?.transcribe) newProgress.transcribe = { status: data.subTasks.transcribe.status };
+        setAnalyzeProgress(prev => ({ ...prev, ...newProgress }));
+
+        if (data.status === 'completed') {
+          setAnalysisResult({
+            videoAnalysis: data.videoAnalysis,
+            beatAnalysis: data.beatAnalysis,
+            transcription: data.transcription,
+          });
+
+          // Auto-generate timeline from analysis results
+          generateTimelineFromAnalysis(data);
+          return;
+        }
+
+        if (data.status === 'failed') {
+          throw new Error('One or more analysis tasks failed');
+        }
+      } catch (e: any) {
+        if (e.message?.includes('failed')) throw e;
+        console.error('[Studio] poll error:', e);
+      }
+    }
+    throw new Error('Auto-analysis timed out');
+  };
+
+  /** Generate timeline clips from analysis results automatically */
+  const generateTimelineFromAnalysis = (analysisData: any) => {
+    const { videoAnalysis, beatAnalysis, transcription } = analysisData;
+    const newTimeline: TimelineClip[] = [];
+
+    // Use scene detection results to create clips
+    if (videoAnalysis?.scenes && Array.isArray(videoAnalysis.scenes)) {
+      videoAnalysis.scenes.forEach((scene: any, index: number) => {
+        const clip: TimelineClip = {
+          id: `scene-${index}-${Date.now()}`,
+          assetId: userAssets[0]?.id || "",
+          duration: scene.duration || 5,
+          description: scene.description || `场景 ${index + 1}`,
+          source: userAssets[0]?.type || "user",
+          transition: index > 0 ? "fade" : "none",
+          effect: "none",
+        };
+
+        // Add subtitle from transcription if available
+        if (transcription?.segments && Array.isArray(transcription.segments)) {
+          const matchingSubs = transcription.segments.filter((seg: any) =>
+            seg.start >= scene.startTime && seg.end <= (scene.startTime + (scene.duration || 5))
+          );
+          if (matchingSubs.length > 0) {
+            clip.textOverlay = matchingSubs.map((s: any) => s.text).join(" ");
+            clip.textStyle = { font_size: 18, color: "#FFFFFF" };
+          }
+        }
+
+        newTimeline.push(clip);
+      });
+    }
+
+    // If no scenes detected, create clips based on transcription segments
+    else if (transcription?.segments && Array.isArray(transcription.segments)) {
+      transcription.segments.forEach((segment: any, index: number) => {
+        newTimeline.push({
+          id: `sub-${index}-${Date.now()}`,
+          assetId: userAssets[0]?.id || "",
+          duration: segment.end - segment.start || 3,
+          description: segment.text || `片段 ${index + 1}`,
+          source: userAssets[0]?.type || "user",
+          textOverlay: segment.text,
+          textStyle: { font_size: 18, color: "#FFFFFF" },
+          transition: index > 0 ? "fade" : "none",
+          effect: "none",
+        });
+      });
+
+      // Add beat markers as metadata
+      if (beatAnalysis?.beats && Array.isArray(beatAnalysis.beats)) {
+        console.log(`[Auto-Analyze] Detected ${beatAnalysis.beats.length} beats at BPM: ${beatAnalysis.bpm}`);
+      }
+    }
+
+    // Update timeline with generated clips
+    if (newTimeline.length > 0) {
+      setTimeline(newTimeline);
+      toast.success(language === 'en'
+        ? `📊 Auto-generated ${newTimeline.length} timeline clips from analysis`
+        : `📊 基于分析结果自动生成 ${newTimeline.length} 个时间轴片段`
+      );
+    }
   };
 
   const togglePlay = () => {
@@ -660,6 +834,99 @@ export function Studio() {
       <div className="flex-1 flex flex-col bg-black border-r border-zinc-800 min-w-0">
         {/* Video Player */}
         <div className="flex-1 relative flex items-center justify-center p-4 min-h-[300px]">
+          {/* Auto-Analysis Progress Panel */}
+          {isAnalyzing && (
+            <div className="absolute top-4 right-4 z-20 bg-zinc-900/95 backdrop-blur-sm border border-indigo-500/50 rounded-lg p-4 shadow-xl max-w-xs">
+              <div className="flex items-center mb-3">
+                <Brain className="w-5 h-5 text-indigo-400 mr-2 animate-pulse" />
+                <span className="text-white font-semibold text-sm">
+                  {language === 'en' ? "AI Analysis in Progress..." : "AI 智能分析中..."}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {/* Video Analysis Progress */}
+                <div className="flex items-center space-x-2">
+                  <Film className="w-4 h-4 text-blue-400" />
+                  <span className="text-xs text-zinc-300 flex-1">
+                    {language === 'en' ? "Scene Detection" : "场景检测"}
+                  </span>
+                  {analyzeProgress.video_analyze.status === 'completed' ? (
+                    <span className="text-xs text-green-400">✓</span>
+                  ) : analyzeProgress.video_analyze.status === 'failed' ? (
+                    <span className="text-xs text-red-400">✗</span>
+                  ) : (
+                    <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+                  )}
+                </div>
+
+                {/* Beat Analysis Progress */}
+                <div className="flex items-center space-x-2">
+                  <Music className="w-4 h-4 text-purple-400" />
+                  <span className="text-xs text-zinc-300 flex-1">
+                    {language === 'en' ? "Beat Detection" : "节拍检测"}
+                  </span>
+                  {analyzeProgress.beat_analyze.status === 'completed' ? (
+                    <span className="text-xs text-green-400">✓</span>
+                  ) : analyzeProgress.beat_analyze.status === 'failed' ? (
+                    <span className="text-xs text-red-400">✗</span>
+                  ) : analyzeProgress.beat_analyze.status === 'analyzing' ? (
+                    <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+                  ) : (
+                    <span className="text-xs text-zinc-500">⏳</span>
+                  )}
+                </div>
+
+                {/* Transcription Progress */}
+                <div className="flex items-center space-x-2">
+                  <MessageSquare className="w-4 h-4 text-green-400" />
+                  <span className="text-xs text-zinc-300 flex-1">
+                    {language === 'en' ? "Subtitle Generation" : "字幕生成"}
+                  </span>
+                  {analyzeProgress.transcribe.status === 'completed' ? (
+                    <span className="text-xs text-green-400">✓</span>
+                  ) : analyzeProgress.transcribe.status === 'failed' ? (
+                    <span className="text-xs text-red-400">✗</span>
+                  ) : analyzeProgress.transcribe.status === 'analyzing' ? (
+                    <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
+                  ) : (
+                    <span className="text-xs text-zinc-500">⏳</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-zinc-700">
+                <p className="text-[10px] text-zinc-500 text-center">
+                  {language === 'en'
+                    ? "Automatically analyzing your video content..."
+                    : "正在自动分析您的视频内容..."}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Analysis Results Summary (shown after completion) */}
+          {!isAnalyzing && analysisResult && (
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 bg-gradient-to-r from-indigo-600/90 to-purple-600/90 backdrop-blur-sm rounded-full px-6 py-2 shadow-xl">
+              <div className="flex items-center space-x-4 text-white text-xs font-medium">
+                <span className="flex items-center">
+                  <Film className="w-3.5 h-3.5 mr-1" />
+                  {analysisResult.videoAnalysis?.scenes?.length || 0} {language === 'en' ? 'scenes' : '场景'}
+                </span>
+                <span className="text-white/30">|</span>
+                <span className="flex items-center">
+                  <Music className="w-3.5 h-3.5 mr-1" />
+                  {analysisResult.beatAnalysis?.bpm || 0} BPM
+                </span>
+                <span className="text-white/30">|</span>
+                <span className="flex items-center">
+                  <MessageSquare className="w-3.5 h-3.5 mr-1" />
+                  {analysisResult.transcription?.segments?.length || 0} {language === 'en' ? 'subtitles' : '字幕'}
+                </span>
+              </div>
+            </div>
+          )}
+
           {previewIndex !== null && (
             <div className="absolute top-4 left-4 z-10 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded animate-pulse">
               {t("studio.previewing", language)}

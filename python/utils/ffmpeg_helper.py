@@ -115,3 +115,38 @@ def trim_video(input_path: str, output_path: str, start: float, duration: float)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg trim failed: {result.stderr[:200]}")
+
+
+def extract_audio(video_path: str, output_path: str):
+    """Extract audio track from video as 16kHz mono WAV (Whisper optimal format)."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-ar", "16000",
+        "-ac", "1",
+        "-vn",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg extract_audio failed: {result.stderr[:200]}")
+
+
+def burn_subtitles(video_path: str, srt_path: str, output_path: str):
+    """Burn .srt subtitles into video using FFmpeg subtitles filter."""
+    # Normalize path separators and escape colons for FFmpeg filter syntax
+    safe_srt = srt_path.replace("\\", "/").replace(":", "\\:")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-vf", (
+            f"subtitles={safe_srt}:force_style="
+            "'FontSize=18,PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00000000,Outline=2'"
+        ),
+        "-c:a", "copy",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg burn_subtitles failed: {result.stderr[:200]}")

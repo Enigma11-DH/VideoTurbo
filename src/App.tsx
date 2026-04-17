@@ -9,7 +9,6 @@ import { Sidebar } from "@/components/Sidebar";
 import { NewProject } from "@/components/NewProject";
 import { TaskList } from "@/components/TaskList";
 import { Settings } from "@/components/Settings";
-import { Studio } from "@/components/Studio";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("new");
@@ -20,7 +19,6 @@ export default function App() {
       <main className="flex-1 overflow-y-auto">
         {activeTab === "new" && <NewProject setActiveTab={setActiveTab} />}
         {activeTab === "tasks" && <TaskList />}
-        {activeTab === "studio" && <Studio />}
         {activeTab === "settings" && <Settings />}
       </main>
       <Toaster />

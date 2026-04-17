@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { Language } from './i18n';
 
 export type TaskStatus =
@@ -13,10 +14,14 @@ export type TaskStatus =
   | 'pipeline_analyzing'
   | 'pipeline_fetching'
   | 'pipeline_rendering'
+  | 'transcribing'
+  | 'video_analyzing'
+  | 'beat_analyzing'
+  | 'auto_editing'
   | 'completed'
   | 'failed';
 
-export type TaskType = 'render' | 'analyze' | 'crawl' | 'pipeline';
+export type TaskType = 'render' | 'analyze' | 'crawl' | 'pipeline' | 'transcribe' | 'video_analyze' | 'beat_analyze' | 'auto_edit';
 
 export interface VideoTask {
   id: string;
@@ -115,8 +120,85 @@ function mapBackendStatus(s: string): TaskStatus {
     pipeline_analyzing: 'pipeline_analyzing',
     pipeline_fetching: 'pipeline_fetching',
     pipeline_rendering: 'pipeline_rendering',
+    transcribing: 'transcribing',
+    video_analyzing: 'video_analyzing',
+    beat_analyzing: 'beat_analyzing',
+    auto_editing: 'auto_editing',
     completed: 'completed',
     failed: 'failed',
   };
   return map[s] || 'pending';
 }
+
+// --------------------------------------------------------------------------- #
+// Draft Store — persisted form state for NewProject                            #
+// File objects can't be serialised, so we store metadata only and the user    //
+// must re-select files after a page reload. URL / config fields survive.       //
+// --------------------------------------------------------------------------- #
+
+export interface MediaFileMeta {
+  name: string;
+  size: number;
+  type: string;   // MIME type
+}
+
+interface DraftState {
+  // Material metadata (survives page switch, not full file reload)
+  mediaFileMetas: MediaFileMeta[];
+  referenceUrl: string;
+  audioFileName: string | null;
+  // Config
+  aspectRatio: string;
+  duration: number;
+  template: string;
+  // API
+  selectedProvider: string;
+  apiKey: string;
+  customBaseUrl: string;
+  customModel: string;
+  // Actions
+  setMediaFileMetas: (metas: MediaFileMeta[]) => void;
+  setReferenceUrl: (url: string) => void;
+  setAudioFileName: (name: string | null) => void;
+  setAspectRatio: (ratio: string) => void;
+  setDuration: (dur: number) => void;
+  setTemplate: (tpl: string) => void;
+  setSelectedProvider: (id: string) => void;
+  setApiKey: (key: string) => void;
+  setCustomBaseUrl: (url: string) => void;
+  setCustomModel: (model: string) => void;
+  clearDraft: () => void;
+}
+
+const DRAFT_INITIAL = {
+  mediaFileMetas: [] as MediaFileMeta[],
+  referenceUrl: '',
+  audioFileName: null as string | null,
+  aspectRatio: '9:16',
+  duration: 30,
+  template: 'vlog',
+  selectedProvider: 'zhipu',
+  apiKey: '',
+  customBaseUrl: '',
+  customModel: '',
+};
+
+export const useDraftStore = create<DraftState>()(
+  persist(
+    (set) => ({
+      ...DRAFT_INITIAL,
+      setMediaFileMetas: (metas) => set({ mediaFileMetas: metas }),
+      setReferenceUrl:   (url)   => set({ referenceUrl: url }),
+      setAudioFileName:  (name)  => set({ audioFileName: name }),
+      setAspectRatio:    (ratio) => set({ aspectRatio: ratio }),
+      setDuration:       (dur)   => set({ duration: dur }),
+      setTemplate:       (tpl)   => set({ template: tpl }),
+      setSelectedProvider: (id)  => set({ selectedProvider: id }),
+      setApiKey:         (key)   => set({ apiKey: key }),
+      setCustomBaseUrl:  (url)   => set({ customBaseUrl: url }),
+      setCustomModel:    (model) => set({ customModel: model }),
+      clearDraft: () => set(DRAFT_INITIAL),
+    }),
+    { name: 'videoturbo-draft' }
+  )
+);
