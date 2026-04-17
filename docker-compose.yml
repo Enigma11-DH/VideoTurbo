@@ -1,10 +1,9 @@
-version: "3.8"
-
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile.node
+      network: host
     ports:
       - "3000:3000"
     volumes:
@@ -22,6 +21,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.python
+      network: host
     volumes:
       - ./output:/app/output
       - ./db:/app/db
@@ -45,6 +45,7 @@ services:
     build:
       context: ./python
       dockerfile: Dockerfile.api
+      network: host
     ports:
       - "8000:8000"
     volumes:

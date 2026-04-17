@@ -183,8 +183,8 @@ export function NewProject({ setActiveTab }: NewProjectProps) {
   const effectiveBaseUrl = selectedProvider === "custom" ? customBaseUrl : currentProvider?.baseUrl || "";
   const effectiveModel = selectedProvider === "custom" ? customModel : currentProvider?.model || "";
 
-  // ---- Sync config changes to draft store ----
-  const syncDraft = () => {
+  // ---- Sync config changes to draft store (using useEffect to avoid setState during render) ----
+  useEffect(() => {
     draft.setReferenceUrl(referenceUrl);
     draft.setAspectRatio(aspectRatio);
     draft.setDuration(duration);
@@ -193,10 +193,7 @@ export function NewProject({ setActiveTab }: NewProjectProps) {
     draft.setApiKey(apiKey);
     draft.setCustomBaseUrl(customBaseUrl);
     draft.setCustomModel(customModel);
-  };
-
-  // Sync on every render (lightweight — just calls setters)
-  syncDraft();
+  }, [referenceUrl, aspectRatio, duration, template, selectedProvider, apiKey, customBaseUrl, customModel]);
 
   // ---- File handlers ----
 

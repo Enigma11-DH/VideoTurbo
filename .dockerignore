@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.qoder
+*.db
+*.db-wal
+*.db-shm
+output
+.env
+.env.local
+__pycache__
+*.pyc
+.vscode
+.idea
